@@ -1,35 +1,21 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import React, { useState } from "react";
+import CSVIngestPage from './CSVIngestPage';
+import NLQueryDashboard from './NLQueryDashboard';
 
 function App() {
-  const [count, setCount] = useState(0)
-
+  const [page, setPage] = useState("csv");
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
+    <div>
+      <nav style={{ padding: 16, borderBottom: "1px solid #ccc", marginBottom: 24 }}>
+        <button onClick={() => setPage("csv")} style={{ marginRight: 16 }}>
+          CSV Ingest
         </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+        <button onClick={() => setPage("nlq")}>Natural Language Query</button>
+      </nav>
+      {page === "csv" && <CSVIngestPage />}
+      {page === "nlq" && <NLQueryDashboard />}
+    </div>
+  );
 }
 
-export default App
+export default App;

@@ -19,6 +19,8 @@ build/
 
 # Python virtual environments
 venv/
+.venv/
+.venv
 
 # Python cache
 __pycache__/
