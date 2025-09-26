@@ -1,0 +1,55 @@
+version: '3.8'
+services:
+  mongo:
+    image: mongo:6
+    container_name: mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: delivery_data
+
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: backend
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/delivery_data
+      - REDIS_URL=redis://redis:6379/0
+      # Add your LLM API keys here, e.g.:
+      # - OPENAI_API_KEY=sk-xxx
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mongo
+      - redis
+    volumes:
+      - ./backend:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  ui:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    container_name: ui
+    environment:
+      - VITE_API_BASE_URL=http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    command: ["npm", "run", "dev", "--", "--host"]
+
+volumes:
+  mongo_data:

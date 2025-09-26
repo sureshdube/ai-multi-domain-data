@@ -1,0 +1,8 @@
+# UI Dockerfile
+FROM node:20
+WORKDIR /app
+COPY ui/package.json ./
+RUN rm -rf node_modules package-lock.json && npm install
+COPY ui/ ./
+EXPOSE 3000
+CMD ["npm", "run", "dev", "--", "--host"]

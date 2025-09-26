@@ -23,4 +23,23 @@ export const postNLQuery = async (query) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt: query })
   });
+export const getTrends = async () => {
+  const res = await apiFetch("/api/trends");
+  return res.json();
+};
+
+export const getCasesForTrend = async (trendId) => {
+  const res = await apiFetch(`/api/cases/${trendId}`);
+  return res.json();
+};
+
+export const uploadCSVToDB = async (file, collection) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("collection", collection);
+  return apiFetch("/api/ingest-csv-to-db", {
+    method: "POST",
+    body: formData
+  });
+};
 // Add more API calls as needed

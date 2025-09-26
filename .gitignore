@@ -1,3 +1,5 @@
+# Ignore LLM config (contains API keys or sensitive info)
+backend/llm_config.json
 # Node.js dependencies
 node_modules/
 
