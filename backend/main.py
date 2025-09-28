@@ -88,33 +88,51 @@ def call_llm_api(prompt, schema=None, data_sample=None):
     """
     providers = get_llm_providers_by_priority()
     for provider in providers:
+        provider_name = provider.get("name", "unknown")
         try:
-            if provider["name"] == "open_source_llm":
-                # Example: POST to open source LLM
-                resp = requests.post(provider["url"], json={"prompt": prompt, "schema": schema, "data": data_sample})
-                if resp.ok:
-                    return resp.json()
-            elif provider["name"] == "openai":
-                headers = {"Authorization": f"Bearer {provider['api_key']}", "Content-Type": "application/json"}
-                payload = {
-                    "model": "gpt-3.5-turbo",
-                    "messages": [
-                        {"role": "system", "content": f"Schema: {schema}\nSample: {data_sample}"},
-                        {"role": "user", "content": prompt}
-                    ]
-                }
-                resp = requests.post(provider["url"], headers=headers, json=payload)
-                if resp.ok:
-                    return resp.json()
-            elif provider["name"] == "gemini":
-                headers = {"Authorization": f"Bearer {provider['api_key']}"}
-                payload = {
-                    "contents": [{"parts": [{"text": f"Schema: {schema}\nSample: {data_sample}\nPrompt: {prompt}"}]}]
-                }
-                resp = requests.post(provider["url"], headers=headers, json=payload)
-                if resp.ok:
-                    return resp.json()
+            if provider_name == "open_source_llm":
+                try:
+                    headers = {"Content-Type": "application/json"}
+                    payload = {
+                        "model": provider["model"],
+                        "messages": [
+                            {"role": "system", "content": f"Schema: {schema}\nSample: {data_sample}"},
+                            {"role": "user", "content": prompt}
+                        ]
+                    }
+                    resp = requests.post(provider["url"], headers=headers, json=payload)
+                    if resp.ok:
+                        return resp.json()
+                except Exception as e:
+                    logger.error(f"Error with open_source_llm provider: {e}")
+            elif provider_name == "openai":
+                try:
+                    headers = {"Authorization": f"Bearer {provider['api_key']}", "Content-Type": "application/json"}
+                    payload = {
+                        "model": provider["model"],
+                        "messages": [
+                            {"role": "system", "content": f"Schema: {schema}\nSample: {data_sample}"},
+                            {"role": "user", "content": prompt}
+                        ]
+                    }
+                    resp = requests.post(provider["url"], headers=headers, json=payload)
+                    if resp.ok:
+                        return resp.json()
+                except Exception as e:
+                    logger.error(f"Error with openai provider: {e}")
+            elif provider_name == "gemini":
+                try:
+                    headers = {"Authorization": f"Bearer {provider['api_key']}"}
+                    payload = {
+                        "contents": [{"parts": [{"text": f"Schema: {schema}\nSample: {data_sample}\nPrompt: {prompt}"}]}]
+                    }
+                    resp = requests.post(provider["url"], headers=headers, json=payload)
+                    if resp.ok:
+                        return resp.json()
+                except Exception as e:
+                    logger.error(f"Error with gemini provider: {e}")
         except Exception as e:
+            logger.error(f"Unexpected error with provider {provider_name}: {e}")
             continue
     return {"error": "All LLM providers failed"}
 
@@ -401,9 +419,22 @@ async def llm_query(request: Request):
         + (f"\n{field_mapping_section}\n" if field_mapping_section else "")
         + f"User Question: {prompt}\n"
         "When referring to dynamic date ranges like 'last 30 days', use the placeholders {last_30_days_start} and {today} in your queries. Do not use hardcoded dates. The backend will replace these placeholders with the actual dates before executing the query. "
-        "Generate a plan and the necessary MongoDB queries (as Python dicts) to answer the question. "
-        "If the answer requires joining or correlating data, describe the steps and provide the queries for each collection. "
-        "Return a JSON object with a 'plan' (text), 'queries' (dict of collection:query), and 'python' (optional code for post-processing if needed)."
+        "When the user asks for a specific month (e.g., 'August 2025'), use the first day of that month as the start date and the first day of the next month as the end date. For example, for 'August 2025', use '$gte': '2025-08-01T00:00:00Z', '$lt': '2025-09-01T00:00:00Z'. "
+        "Always use only the field names provided in the schema and field mapping. Do not invent or guess field names. "
+        "If the user asks 'why' something failed, ensure your query retrieves the failure reason (e.g., 'reason', 'details', or similar field) and include it in the output. "
+        "\n\n"
+        "EXAMPLES FOR MONTH QUERIES AND FAILURE REASONS:\n"
+        "Q: Why did customer 'John Doe' order fail in August 2025?\n"
+        "A: Use a query like: { 'customer_name': 'John Doe', 'status': 'Failed', 'order_date': { '$gte': '2025-08-01T00:00:00Z', '$lt': '2025-09-01T00:00:00Z' } } and return the 'failure_reason' or 'details' field.\n"
+        "\n"
+        "RESPONSE FORMAT INSTRUCTIONS (IMPORTANT):\n"
+        "Respond ONLY in the following JSON format, with no extra text, markdown, or explanation. Do not use code fences.\n"
+        "{\n"
+        "  \"plan\": <string, step-by-step plan>,\n"
+        "  \"queries\": { <collection_name>: <MongoDB query dict or aggregation pipeline>, ... },\n"
+        "  \"python\": <optional Python code for post-processing, as a string>\n"
+        "}\n"
+        "Do not include any other text, explanation, or formatting. Do not use markdown or code blocks. Only output the JSON object as shown above."
     )
     logger.info(f"LLM llm_prompt: {llm_prompt}")
     # Call LLM for multi-collection reasoning
@@ -432,6 +463,20 @@ async def llm_query(request: Request):
             logger.error(f"Error executing MongoDB query for {collection}: {e}")
             results[collection] = []
 
+    # --- Deduplicate results by order_id before post-processing ---
+    def deduplicate_docs(docs, key='order_id'):
+        seen = set()
+        unique_docs = []
+        for doc in docs:
+            val = doc.get(key)
+            if val is not None and val not in seen:
+                seen.add(val)
+                unique_docs.append(doc)
+        return unique_docs
+
+    for collection in results:
+        results[collection] = deduplicate_docs(results[collection], key='order_id')
+
     # If LLM provided python code for post-processing, try to execute it (optional, advanced)
     final_result = results
     if python_code:
@@ -444,9 +489,43 @@ async def llm_query(request: Request):
         except Exception as e:
             logger.error(f"Error executing LLM-provided python code: {e}")
 
-    # Generate explanation using the actual query results
-    logger.info(f"LLM final_result: {final_result}")
-    explanation = get_llm_explanation(prompt, schemas, samples, queries, final_result)
+    # --- Only pass requested fields to LLM for explanation ---
+    def extract_requested_fields(prompt, schemas):
+        # Naive: look for field names in prompt that match schema fields
+        requested = set()
+        prompt_lower = prompt.lower()
+        for collection, fields in schemas.items():
+            for f in fields:
+                if f.lower() in prompt_lower:
+                    requested.add(f)
+        # Fallback: if none found, return all fields (to avoid empty)
+        if not requested:
+            for fields in schemas.values():
+                requested.update(fields)
+        return list(requested)
+
+    requested_fields = extract_requested_fields(prompt, schemas)
+    # Filter final_result to only requested fields and limit to 5 items per collection
+    def filter_and_limit_fields(data, fields, limit=5):
+        # Lowercase set for case-insensitive matching
+        fields_lc = set(f.lower() for f in fields)
+        def filter_doc(doc):
+            filtered = {fk: v2 for fk, v2 in doc.items() if fk.lower() in fields_lc}
+            # If filtering results in empty dict, return original doc
+            return filtered if filtered else doc
+        if isinstance(data, dict):
+            return {k: [
+                filter_doc(v) for v in vlist[:limit]
+            ] for k, vlist in data.items()}
+        if isinstance(data, list):
+            return [
+                filter_doc(v) for v in data[:limit]
+            ]
+        return data
+
+    filtered_result = filter_and_limit_fields(final_result, requested_fields, limit=5)
+    logger.info(f"LLM filtered_result for explanation: {filtered_result}")
+    explanation = get_llm_explanation(prompt, schemas, samples, queries, filtered_result)
     logger.info(f"LLM explanation: {explanation}")
 
     # Defensive: If LLM explanation says 'no data' but results exist, re-prompt or override
@@ -479,20 +558,22 @@ async def llm_query(request: Request):
         explanation = call_llm_api(reprompt, schemas, samples)
 
     return {
-        "llm_result": final_result,
+        "llm_result": explanation,
         "plan": plan,
         "explanation": explanation,
         "queries": queries,
         "schemas": schemas,
         "samples": samples,
-        "collections": collections
+        "collections": collections,
+        "raw_result": final_result  # full, unfiltered result
     }
 
 
 # --- LLM Multi-Collection Parsing and Execution ---
-import json as _json
-import ast
 import re
+import ast
+import json as _json
+from typing import Any, Dict, Optional, Tuple
 
 def _clean_jsonish(text: str) -> str:
     """Remove JS-style comments and ISODate wrappers for JSON parsing."""
@@ -535,38 +616,301 @@ def extract_result_dict(text: str):
                 pass
     return None
 
-def parse_llm_multi_collection(llm_response):
-    plan = ""
-    queries = {}
-    python_code = None
-    try:
-        # Extract assistant text
-        if isinstance(llm_response, dict) and 'choices' in llm_response:
-            choice = llm_response['choices'][0]
-            if 'message' in choice and 'content' in choice['message']:
-                text = choice['message']['content']
-            else:
-                text = choice.get('text', '{}')
-        elif isinstance(llm_response, dict) and 'plan' in llm_response:
-            text = _json.dumps(llm_response)
-        else:
-            text = str(llm_response)
-        # First attempt: direct JSON (after cleaning)
-        parsed = None
+# -----------------------------
+# Helpers
+# -----------------------------
+
+def _get_assistant_text(llm_response: Any) -> str:
+    """
+    Extract the assistant text across OpenAI/Gemini-like responses.
+    """
+    if isinstance(llm_response, dict):
+        # OpenAI Chat Completions-like
+        choices = llm_response.get("choices")
+        if isinstance(choices, list) and choices:
+            ch0 = choices[0]
+            if isinstance(ch0, dict):
+                msg = ch0.get("message")
+                if isinstance(msg, dict) and "content" in msg:
+                    return msg.get("content") or ""
+                # Legacy text field
+                if "text" in ch0:
+                    return ch0.get("text") or ""
+    # Already a string or unknown
+    return str(llm_response or "")
+
+def _try_parse_json_object(s: str) -> Optional[dict]:
+    """
+    Try to parse a JSON object from the given string. Return None if it fails.
+    """
+    if not s:
+        return None
+    s = s.strip()
+    # If content looks like a JSON object
+    if s.startswith("{") and s.endswith("}"):
         try:
-            parsed = _json.loads(_clean_jsonish(text))
+            return _json.loads(s)
         except Exception:
-            parsed = extract_result_dict(text)
-        if parsed is None:
-            raise ValueError("Could not parse LLM response as JSON or Python dict")
-        plan = parsed.get('plan', '')
-        queries = parsed.get('queries', {})
-        python_code = parsed.get('python', None)
-    except Exception as e:
-        logger.error(f"Failed to parse LLM multi-collection response: {e}")
-        plan = str(llm_response)
-        queries = {}
+            return None
+    # Some models wrap JSON in code fences
+    m = re.search(r"```(?:json|javascript|)\s*(\{.*?\})\s*```", s, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        try:
+            return _json.loads(m.group(1))
+        except Exception:
+            return None
+    return None
+
+def _extract_plan_from_text(text: str) -> str:
+    """
+    Pull "Plan:" section when content isn't structured JSON.
+    """
+    m = re.search(r'(?is)Plan:\s*(.*?)\n\s*(?:Queries?:|$)', text)
+    if m:
+        return m.group(1).strip()
+    m2 = re.search(r'(?is)Plan:\s*(.*)$', text)
+    return m2.group(1).strip() if m2 else ""
+
+def _iter_code_blocks(text: str):
+    """
+    Yield (language, code) for all fenced code blocks.
+    """
+    for m in re.finditer(r'```([a-zA-Z0-9_+-]*)\s*(.*?)```', text, flags=re.DOTALL):
+        lang = (m.group(1) or "").lower()
+        code = m.group(2)
+        yield lang, code
+
+def _first_braced_literal(s: str) -> str:
+    """
+    Return the first {...} or [...] literal by brace matching.
+    """
+    # Prefer an assignment right-hand side if present
+    if '=' in s:
+        # keep RHS of the first '=' (common in "query = {...}" / "pipeline = [...]")
+        s = s.split('=', 1)[1]
+
+    # Find first '{' or '['
+    start_brace_pos = None
+    start_ch = None
+    for i, ch in enumerate(s):
+        if ch in '{[':
+            start_brace_pos = i
+            start_ch = ch
+            break
+    if start_brace_pos is None:
+        raise ValueError("No dict/list literal found.")
+
+    open_ch, close_ch = ('{', '}') if start_ch == '{' else ('[', ']')
+    depth = 0
+    end_pos = None
+    for i in range(start_brace_pos, len(s)):
+        if s[i] == open_ch:
+            depth += 1
+        elif s[i] == close_ch:
+            depth -= 1
+            if depth == 0:
+                end_pos = i + 1
+                break
+    if end_pos is None:
+        raise ValueError("Unbalanced braces.")
+    return s[start_brace_pos:end_pos].strip()
+
+def _parse_literal(s: str):
+    """
+    Parse a Python/JSON literal safely. Keeps Mongo $-keys intact.
+    """
+    # Try Python literal
+    try:
+        return ast.literal_eval(s)
+    except Exception:
+        pass
+    # Try JSON (normalize single quotes)
+    try:
+        js_like = s
+        # Only do a conservative quote normalization when obviously JSON-like
+        if "'" in js_like and '"' not in js_like:
+            js_like = js_like.replace("'", '"')
+        return _json.loads(js_like)
+    except Exception:
+        raise
+
+def _parse_query_from_code_block(code: str):
+    """
+    From a code block, try to parse a dict (filter) or list (pipeline).
+    Returns either a dict or a list.
+    """
+    literal = _first_braced_literal(code)
+    return _parse_literal(literal)
+
+def _extract_python_block_after(text: str, heading_regex: str) -> Optional[str]:
+    """
+    Grab the first code block that appears after a given heading (regex).
+    """
+    h = re.search(heading_regex, text, flags=re.IGNORECASE)
+    if not h:
+        return None
+    tail = text[h.end():]
+    m = re.search(r'```(?:[a-zA-Z0-9_+-]*)\s*(.*?)```', tail, flags=re.DOTALL)
+    return m.group(1) if m else None
+
+def _maybe_parse_db_call(line: str):
+    """
+    Handle forms like:
+      db.orders.find({...})
+      db.orders.aggregate([...])
+    Return (collection, value, kind) where kind is "filter" or "pipeline".
+    """
+    m = re.search(r'db\.([A-Za-z0-9_.-]+)\.(find|aggregate)\s*\((.*)\)\s*', line, flags=re.DOTALL)
+    if not m:
+        return None
+    coll = m.group(1)
+    op = m.group(2).lower()
+    inside = m.group(3).strip()
+
+    if op == 'find':
+        # find(filter[, projection])
+        # take the first literal argument
+        lit = _first_braced_literal(inside)
+        return coll, _parse_literal(lit), "filter"
+    else:
+        # aggregate([ ... ])
+        lit = _first_braced_literal(inside)
+        return coll, _parse_literal(lit), "pipeline"
+
+# -----------------------------
+# Main parser
+# -----------------------------
+
+def parse_llm_multi_collection(llm_response: Any) -> Tuple[str, Dict[str, Any], Optional[str]]:
+    """
+    Returns: (plan, queries, python_code)
+
+    - plan: string (may be empty)
+    - queries: dict mapping collection -> filter OR {"$pipeline": [...]} when an aggregation is detected
+    - python_code: optional Python post-processing block if present
+    """
+    text = _get_assistant_text(llm_response).strip()
+
+    # 1) If the entire content is a JSON object (or fenced JSON), use it
+    as_json = _try_parse_json_object(text)
+    if isinstance(as_json, dict) and as_json:
+        plan = as_json.get("plan", "")
+        queries_field = as_json.get("queries", {})
+        python_code = as_json.get("python") or as_json.get("post_processing")  # optional
+
+        queries: Dict[str, Any] = {}
+        if isinstance(queries_field, dict):
+            for coll, val in queries_field.items():
+                # If it looks like an aggregation pipeline (list), store as $pipeline
+                if isinstance(val, list):
+                    queries[coll] = {"$pipeline": val}
+                else:
+                    queries[coll] = val
+        return plan, queries, python_code
+
+    # 2) Otherwise, parse free-form text + code blocks
+    plan = _extract_plan_from_text(text)
+    queries: Dict[str, Any] = {}
+    python_code: Optional[str] = None
+
+    # Try to read any code block labeled "Python code for post-processing"
+    python_code = _extract_python_block_after(text, r'Python code for post-processing\s*:')
+
+    # 2a) Try numbered or bullet collection headings BEFORE a code block, like:
+    #     "1. orders:" or "- orders:" or "orders:" (line)
+    #     followed by a fenced block containing dict/list
+    pattern = re.compile(
+        r'(?m)^(?:\s*(?:\d+\.\s*|[-*]\s*)?)'           # optional bullet/number
+        r'([A-Za-z0-9_.:-]+)\s*:\s*$'                  # collection name + colon
+    )
+
+    pos = 0
+    while True:
+        m = pattern.search(text, pos)
+        if not m:
+            break
+        coll = m.group(1).strip()
+        # Find the FIRST code block after this heading
+        mcode = re.search(r'```([a-zA-Z0-9_+-]*)\s*(.*?)```', text[m.end():], flags=re.DOTALL)
+        if not mcode:
+            pos = m.end()
+            continue
+        code = mcode.group(2)
+        try:
+            parsed = _parse_query_from_code_block(code)
+            if isinstance(parsed, list):
+                queries[coll] = {"$pipeline": parsed}
+            else:
+                queries[coll] = parsed
+        except Exception:
+            pass
+        pos = m.end()
+
+    # 2b) If nothing yet, take the first code block after a "Queries" section
+    if not queries:
+        qsec = re.search(r'(?is)Queries?\s*:\s*(.*)', text)
+        if qsec:
+            mcode = re.search(r'```([a-zA-Z0-9_+-]*)\s*(.*?)```', qsec.group(1), flags=re.DOTALL)
+            if mcode:
+                try:
+                    parsed = _parse_query_from_code_block(mcode.group(2))
+                    # Unknown collection name; store under default
+                    coll = "__default_pipeline__" if isinstance(parsed, list) else "__default__"
+                    queries[coll] = {"$pipeline": parsed} if isinstance(parsed, list) else parsed
+                except Exception:
+                    pass
+
+    # 2c) As a last resort, scan lines for db.<coll>.find(...) / .aggregate([...])
+    if not queries:
+        for line in text.splitlines():
+            try:
+                parsed = _maybe_parse_db_call(line)
+                if parsed:
+                    coll, val, kind = parsed
+                    if kind == "pipeline":
+                        queries[coll] = {"$pipeline": val}
+                    else:
+                        queries[coll] = val
+            except Exception:
+                continue
+
+    # 2d) If still nothing, but there is a code block, attempt a blind parse into __default__
+    if not queries:
+        for _, code in _iter_code_blocks(text):
+            try:
+                parsed = _parse_query_from_code_block(code)
+                coll = "__default_pipeline__" if isinstance(parsed, list) else "__default__"
+                queries[coll] = {"$pipeline": parsed} if isinstance(parsed, list) else parsed
+                break
+            except Exception:
+                continue
+
     return plan, queries, python_code
+
+# -----------------------------
+# Optional: placeholder resolver
+# -----------------------------
+
+def resolve_placeholders(obj: Any, **vars) -> Any:
+    """
+    Replace strings like "{today}" / "{last_30_days_start}" inside the parsed
+    queries with actual values. Call this before sending to MongoDB.
+    Example:
+        queries = resolve_placeholders(queries,
+                    today=datetime.utcnow(),
+                    last_30_days_start=datetime.utcnow() - timedelta(days=30))
+    """
+    if isinstance(obj, dict):
+        return {k: resolve_placeholders(v, **vars) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [resolve_placeholders(x, **vars) for x in obj]
+    if isinstance(obj, str):
+        # Only replace exact whole-string placeholders (avoid breaking $expr/$dateFromString etc.)
+        if obj.startswith("{") and obj.endswith("}") and obj[1:-1] in vars:
+            return vars[obj[1:-1]]
+    return obj
+
+
 
 @app.post("/api/correlate-events")
 async def correlate_events(request: Request):

@@ -1,7 +1,7 @@
 {
   "providers": [
-    {"name": "open_source_llm", "url": "http://localhost:9000/llm", "priority": 1},
-    {"name": "openai", "url": "https://api.openai.com/v1/chat/completions", "priority": 2, "api_key": "sk-..."},
-    {"name": "gemini", "url": "https://gemini.googleapis.com/v1beta/models/gemini-pro:generateContent", "priority": 3, "api_key": "..."}
+    {"name": "open_source_llm", "url": "http://localhost:8080/v1/chat/completions", "priority": 3,"model":"llama-3.2-3b-instruct"},
+    {"name": "openai", "url": "https://api.openai.com/v1/chat/completions", "priority": 2, "api_key": "sk-","model":"gpt-3.5-turbo"},
+    {"name": "gemini", "url": "https://gemini.googleapis.com/v1beta/models/gemini-pro:generateContent", "priority": 1, "api_key": ""}
   ]
 }

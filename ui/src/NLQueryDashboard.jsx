@@ -5,6 +5,7 @@ function NLQueryDashboard() {
   const [query, setQuery] = useState("");
   const [result, setResult] = useState(null);
   const [explanation, setExplanation] = useState(null);
+  const [rawResult, setRawResult] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -23,6 +24,7 @@ function NLQueryDashboard() {
         const data = await res.json();
         setResult(data.llm_result || data.result || data);
         setExplanation(data.explanation || null);
+        setRawResult(data.raw_result || null);
       }
     } catch (err) {
       setError("Request failed: " + err.message);
@@ -51,6 +53,38 @@ function NLQueryDashboard() {
         <div style={{ background: "#e8f5e9", padding: 16, borderRadius: 8, marginTop: 16, marginBottom: 24 }}>
           <h4>Explanation:</h4>
           <div style={{ whiteSpace: "pre-line", fontSize: 15 }}>{explanation.choices[0].message.content}</div>
+        </div>
+      )}
+
+      {/* Show raw_result as tables for each key (e.g., orders, etc.) */}
+      {rawResult && typeof rawResult === "object" && Object.keys(rawResult).length > 0 && (
+        <div style={{ background: "#e3f2fd", padding: 16, borderRadius: 8, marginTop: 8, marginBottom: 24 }}>
+          <h4>Raw Result Data:</h4>
+          {Object.entries(rawResult).map(([key, arr]) => (
+            Array.isArray(arr) && arr.length > 0 ? (
+              <div key={key} style={{ marginBottom: 24 }}>
+                <div style={{ fontWeight: "bold", marginBottom: 4 }}>{key}</div>
+                <table border="1" cellPadding="8" style={{ borderCollapse: "collapse", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      {Object.keys(arr[0]).map((col) => (
+                        <th key={col}>{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {arr.map((row, i) => (
+                      <tr key={i}>
+                        {Object.values(row).map((v, j) => (
+                          <td key={j}>{typeof v === "object" ? JSON.stringify(v) : v}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null
+          ))}
         </div>
       )}
       {/* Show the previous Result section (table/object rendering) below the explanation for advanced users */}

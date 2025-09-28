@@ -1,5 +1,8 @@
 # Field mapping and descriptions for LLM prompt construction
 
+from dataclasses import field
+
+
 FIELD_MAPPINGS = {
     "deliveries": {
         "delivery date": {"field": "actual_delivery_date", "desc": "The date the delivery actually happened."},
@@ -14,7 +17,9 @@ FIELD_MAPPINGS = {
         "city": {"field": "city", "desc": "The city for delivery."},
         "state": {"field": "state", "desc": "The state for delivery."},
         "pincode": {"field": "pincode", "desc": "The postal code for delivery."},
-        "order id": {"field": "order_id", "desc": "The unique order identifier."}
+        "order id": {"field": "order_id", "desc": "The unique order identifier."},
+        "customers": {"field": "customer_name", "desc": "Customers or customer name should be fetched from customer_name field."},
+        "failed" : {"field"  : "failure_reason", "desc": "if there why the delivery failed, it is mentioned in failure_reason field."}
     },
     # Add mappings for other collections as needed
 }
